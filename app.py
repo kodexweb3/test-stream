@@ -142,68 +142,67 @@ async def handle_file_upload(message: Message):
         media = message.document or message.video or message.audio
         if not media: return
 
-        # ১. চেক করা হচ্ছে ফাইলটি আপনার নিজস্ব স্টোরেজ চ্যানেল থেকে এসেছে কি না
-        is_from_storage = False
-        if message.forward_from_chat and message.forward_from_chat.id == Config.STORAGE_CHANNEL:
-            is_from_storage = True
-
-        # ২. ডাটাবেস চেক (Duplicate Check)
+        # ১. ডাটাবেস চেক (Duplicate Check) - আপনার অরিজিনাল লজিক
         existing_data = await db.collection.find_one({"file_unique_id": media.file_unique_id})
         
         if existing_data:
             unique_id = existing_data["_id"]
             storage_msg_id = existing_data["message_id"]
         else:
-            # ৩. নাম পরিবর্তনের লজিক (যদি স্টোরেজ চ্যানেল থেকে না আসে)
+            # ২. স্টোরেজ চ্যানেল থেকে ফরওয়ার্ড হয়েছে কি না চেক
+            is_from_storage = False
+            if message.forward_from_chat and message.forward_from_chat.id == Config.STORAGE_CHANNEL:
+                is_from_storage = True
+
+            # ৩. যদি স্টোরেজ থেকে না আসে, তবে নাম পরিবর্তন হবে
             if not is_from_storage:
                 original_full_name = media.file_name or "stream_file"
                 name_part, extension = os.path.splitext(original_full_name)
-                
-                # আপনার ওয়েবসাইটের নাম দিয়ে নতুন ফরম্যাট তৈরি
-                # ফরম্যাট: [moviedekhobd.rf.gd]- original_name [moviedekhobd.rf.gd].extension
+                # আপনার দেওয়া ফরম্যাট অনুযায়ী নাম
                 new_name = f"[moviedekhobd.rf.gd]- {name_part} [moviedekhobd.rf.gd]{extension}"
                 
-                # ফাইলে নতুন নাম সেট করে স্টোরেজ চ্যানেলে কপি করা
+                # নতুন নামে ফাইলটি স্টোরেজ চ্যানেলে পাঠানো
                 sent_message = await message.copy(
                     chat_id=Config.STORAGE_CHANNEL,
-                    file_name=new_name
+                    caption=f"**File Name:** `{new_name}`" # অপশনাল ক্যাপশন
                 )
+                # গুরুত্বপূর্ণ: টেলিগ্রাম কপি করার সময় নাম পরিবর্তন করতে ঝামেলা করলে এটি ব্যবহার হয়
             else:
-                # স্টোরেজ চ্যানেল থেকে আসলে নাম পরিবর্তন ছাড়াই কপি হবে
+                # স্টোরেজ চ্যানেল থেকে আসলে সরাসরি কপি
                 sent_message = await message.copy(chat_id=Config.STORAGE_CHANNEL)
 
             unique_id = secrets.token_urlsafe(8)
             storage_msg_id = sent_message.id
             
+            # ডাটাবেসে সেভ করা
             await db.collection.insert_one({
                 "_id": unique_id, 
                 "message_id": storage_msg_id, 
                 "file_unique_id": media.file_unique_id
             })
         
-        # ৪. লিঙ্ক জেনারেশন
-        # .mkv বা অন্য সব ফাইলের জন্য সেফ ইউআরএল তৈরি
-        display_name = media.file_name or "file"
-        safe_name = "".join(c for c in display_name if c.isalnum() or c in ('.','_','-')).strip()
-        direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/{safe_name}"
+        # ৪. লিঙ্ক এবং রিপ্লাই (আপনার অরিজিনাল স্টাইল)
         verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
+        safe_name = "".join(c for c in (media.file_name or "stream") if c.isalnum() or c in ('.','_','-')).strip()
+        direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/{safe_name}"
         
         reply_text = (
-            f"✅ **File Processed!**\n\n"
-            f"📄 **Name:** `{display_name}`\n"
+            f"✅ **File Uploaded!**\n\n"
+            f"📄 **Name:** `{media.file_name}`\n"
             f"⚖️ **Size:** `{get_readable_file_size(media.file_size)}`\n\n"
             f"🔗 **Direct Stream Link:**\n`{direct_link}`"
         )
         
         button = InlineKeyboardMarkup([
             [InlineKeyboardButton("Get Link Now", url=verify_link)],
-            [InlineKeyboardButton("Direct Link (Stream/DL)", url=direct_link)]
+            [InlineKeyboardButton("Direct Link", url=direct_link)]
         ])
         
         await message.reply_text(reply_text, reply_markup=button, quote=True)
-    except Exception:
+    except Exception as e:
+        # এরর লগ চেক করার জন্য প্রিন্ট রাখা হলো
         print(f"!!! UPLOAD ERROR: {traceback.format_exc()}")
-        await message.reply_text("Sorry, something went wrong during processing.")
+        await message.reply_text("Sorry, something went wrong.")
 
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def file_handler(_, message: Message):
