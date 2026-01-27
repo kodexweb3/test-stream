@@ -46,8 +46,10 @@ async def lifespan(app: FastAPI):
         work_loads[0] = 0
         await initialize_clients()
         
-        print(f"Verifying storage channel ({Config.STORAGE_CHANNEL})...")
-        await bot.get_chat(Config.STORAGE_CHANNEL)
+        # Ensure Storage Channel ID is correct format
+        storage_id = int(Config.STORAGE_CHANNEL)
+        print(f"Verifying storage channel ({storage_id})...")
+        await bot.get_chat(storage_id)
         print("✅ Storage channel accessible hai.")
 
         if Config.FORCE_SUB_CHANNEL:
@@ -103,10 +105,6 @@ def get_readable_file_size(size_in_bytes):
         size_in_bytes /= power; n += 1
     return f"{size_in_bytes:.2f} {power_labels[n]}"
 
-def mask_filename(name: str):
-    if not name: return "Protected File"
-    return name # Disabling masking as per your requirement for custom names
-
 # =====================================================================================
 # --- PYROGRAM BOT HANDLERS ---
 # =====================================================================================
@@ -129,12 +127,12 @@ async def start_command(client: Client, message: Message):
     else:
         await message.reply_text(f"👋 **Hello, {message.from_user.first_name}!**\nSend any video/file to get links.")
 
-# Step 1: Handle File and Ask for Name
+# Step 1: Handle File and Ask for Name (Updated filters for .mkv support)
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def handle_incoming_file(client, message: Message):
     media = message.document or message.video or message.audio
-    
-    # Check if duplicate already exists in DB to save time
+    if not media: return
+
     existing_data = await db.collection.find_one({"file_unique_id": media.file_unique_id})
     if existing_data:
         unique_id = existing_data["_id"]
@@ -145,7 +143,6 @@ async def handle_incoming_file(client, message: Message):
         btn = InlineKeyboardMarkup([[InlineKeyboardButton("Get Link", url=verify_link)], [InlineKeyboardButton("Stream", url=direct_link)]])
         return await message.reply_text("✅ This file already exists in our database!", reply_markup=btn, quote=True)
 
-    # If not duplicate, store file message and ask for name
     waiting_for_name[message.from_user.id] = message
     await message.reply_text(
         "📝 **Now send the Name for this file.**\n\n"
@@ -153,7 +150,7 @@ async def handle_incoming_file(client, message: Message):
         quote=True
     )
 
-# Step 2: Receive Name and Process
+# Step 2: Receive Name and Process (Fixed Send Method Error)
 @bot.on_message(filters.private & filters.text & ~filters.command("start"))
 async def process_name_and_upload(client, message: Message):
     user_id = message.from_user.id
@@ -168,31 +165,39 @@ async def process_name_and_upload(client, message: Message):
     name_part, extension = os.path.splitext(original_name)
     if not extension: extension = ".mkv"
 
-    # Formatting: moviedekhobd.rf.gd [Your Name] moviedekhobd.rf.gd.extension
     final_file_name = f"moviedekhobd.rf.gd {user_input_name} moviedekhobd.rf.gd{extension}"
 
     try:
         sts = await message.reply_text("🚀 Processing and sending to storage...")
-        
-        # Uploading to Storage with NEW NAME
-        sent_message = await bot.send_document(
-            chat_id=Config.STORAGE_CHANNEL,
-            document=media.file_id,
-            file_name=final_file_name,
-            caption=f"**File:** `{final_file_name}`"
-        )
+        storage_chat = int(Config.STORAGE_CHANNEL)
+
+        # FIXED: Use send_video if it's a video, otherwise send_document
+        if original_file_message.video:
+            sent_message = await bot.send_video(
+                chat_id=storage_chat,
+                video=media.file_id,
+                file_name=final_file_name,
+                caption=f"**File:** `{final_file_name}`"
+            )
+        else:
+            sent_message = await bot.send_document(
+                chat_id=storage_chat,
+                document=media.file_id,
+                file_name=final_file_name,
+                caption=f"**File:** `{final_file_name}`"
+            )
 
         unique_id = secrets.token_urlsafe(8)
         storage_msg_id = sent_message.id
         
-        # Save to DB
         await db.collection.insert_one({
             "_id": unique_id, 
             "message_id": storage_msg_id, 
             "file_unique_id": media.file_unique_id
         })
 
-        direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/{final_file_name.replace(' ', '_')}"
+        safe_dl_name = final_file_name.replace(' ', '_')
+        direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/{safe_dl_name}"
         verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
 
         await sts.edit(
@@ -203,7 +208,7 @@ async def process_name_and_upload(client, message: Message):
             ])
         )
     except Exception:
-        print(traceback.format_exc())
+        print(f"!!! Error: {traceback.format_exc()}")
         await message.reply_text("❌ Something went wrong while processing.")
 
 # =====================================================================================
@@ -222,7 +227,7 @@ async def get_file_details_api(request: Request, unique_id: str):
     message_id = await db.get_link(unique_id)
     if not message_id: raise HTTPException(404, "Invalid Link")
     try:
-        message = await bot.get_messages(Config.STORAGE_CHANNEL, message_id)
+        message = await bot.get_messages(int(Config.STORAGE_CHANNEL), message_id)
         media = message.document or message.video or message.audio
         file_name = media.file_name or "file"
         safe_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '.', '_', '-')).rstrip()
@@ -266,7 +271,7 @@ async def stream_media(r:Request, mid:int, fname:str):
     idx = min(work_loads, key=work_loads.get); c = multi_clients[idx]
     st = class_cache.get(c) or ByteStreamer(c); class_cache[c]=st
     try:
-        msg = await c.get_messages(Config.STORAGE_CHANNEL, mid)
+        msg = await c.get_messages(int(Config.STORAGE_CHANNEL), mid)
         m = msg.document or msg.video or msg.audio
         fid=FileId.decode(m.file_id); fsize=m.file_size; rh=r.headers.get("Range",""); fb,ub=0,fsize-1
         if rh:
@@ -279,13 +284,13 @@ async def stream_media(r:Request, mid:int, fname:str):
         return StreamingResponse(body, status_code=206 if rh else 200, headers=hdrs)
     except: raise HTTPException(404)
 
-@bot.on_chat_member_updated(filters.chat(Config.STORAGE_CHANNEL))
+@bot.on_chat_member_updated(filters.chat(int(Config.STORAGE_CHANNEL)))
 async def simple_gatekeeper(c, m):
     try:
         if m.new_chat_member and m.new_chat_member.status==enums.ChatMemberStatus.MEMBER:
             if m.new_chat_member.user.id not in [Config.OWNER_ID, c.me.id]:
-                await c.ban_chat_member(Config.STORAGE_CHANNEL, m.new_chat_member.user.id)
-                await c.unban_chat_member(Config.STORAGE_CHANNEL, m.new_chat_member.user.id)
+                await c.ban_chat_member(int(Config.STORAGE_CHANNEL), m.new_chat_member.user.id)
+                await c.unban_chat_member(int(Config.STORAGE_CHANNEL), m.new_chat_member.user.id)
     except: pass
 
 if __name__ == "__main__":
