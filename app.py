@@ -142,46 +142,68 @@ async def handle_file_upload(message: Message):
         media = message.document or message.video or message.audio
         if not media: return
 
-        # --- MONGODB DUPLICATE CHECK ---
-        # Search if file already exists using file_unique_id
+        # ১. চেক করা হচ্ছে ফাইলটি আপনার নিজস্ব স্টোরেজ চ্যানেল থেকে এসেছে কি না
+        is_from_storage = False
+        if message.forward_from_chat and message.forward_from_chat.id == Config.STORAGE_CHANNEL:
+            is_from_storage = True
+
+        # ২. ডাটাবেস চেক (Duplicate Check)
         existing_data = await db.collection.find_one({"file_unique_id": media.file_unique_id})
         
         if existing_data:
             unique_id = existing_data["_id"]
             storage_msg_id = existing_data["message_id"]
         else:
-            # If new file, copy to storage and save
-            sent_message = await message.copy(chat_id=Config.STORAGE_CHANNEL)
+            # ৩. নাম পরিবর্তনের লজিক (যদি স্টোরেজ চ্যানেল থেকে না আসে)
+            if not is_from_storage:
+                original_full_name = media.file_name or "stream_file"
+                name_part, extension = os.path.splitext(original_full_name)
+                
+                # আপনার ওয়েবসাইটের নাম দিয়ে নতুন ফরম্যাট তৈরি
+                # ফরম্যাট: [moviedekhobd.rf.gd]- original_name [moviedekhobd.rf.gd].extension
+                new_name = f"[moviedekhobd.rf.gd]- {name_part} [moviedekhobd.rf.gd]{extension}"
+                
+                # ফাইলে নতুন নাম সেট করে স্টোরেজ চ্যানেলে কপি করা
+                sent_message = await message.copy(
+                    chat_id=Config.STORAGE_CHANNEL,
+                    file_name=new_name
+                )
+            else:
+                # স্টোরেজ চ্যানেল থেকে আসলে নাম পরিবর্তন ছাড়াই কপি হবে
+                sent_message = await message.copy(chat_id=Config.STORAGE_CHANNEL)
+
             unique_id = secrets.token_urlsafe(8)
             storage_msg_id = sent_message.id
-            # Storing with file_unique_id for future checks
+            
             await db.collection.insert_one({
                 "_id": unique_id, 
                 "message_id": storage_msg_id, 
                 "file_unique_id": media.file_unique_id
             })
         
-        verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
-        # Direct stream link construction
-        safe_name = "".join(c for c in (media.file_name or "stream") if c.isalnum() or c in ('.','_','-')).strip()
+        # ৪. লিঙ্ক জেনারেশন
+        # .mkv বা অন্য সব ফাইলের জন্য সেফ ইউআরএল তৈরি
+        display_name = media.file_name or "file"
+        safe_name = "".join(c for c in display_name if c.isalnum() or c in ('.','_','-')).strip()
         direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/{safe_name}"
+        verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
         
         reply_text = (
-            f"✅ **File Uploaded!**\n\n"
-            f"📄 **Name:** `{media.file_name}`\n"
+            f"✅ **File Processed!**\n\n"
+            f"📄 **Name:** `{display_name}`\n"
             f"⚖️ **Size:** `{get_readable_file_size(media.file_size)}`\n\n"
             f"🔗 **Direct Stream Link:**\n`{direct_link}`"
         )
         
         button = InlineKeyboardMarkup([
             [InlineKeyboardButton("Get Link Now", url=verify_link)],
-            [InlineKeyboardButton("Direct Link", url=direct_link)]
+            [InlineKeyboardButton("Direct Link (Stream/DL)", url=direct_link)]
         ])
         
         await message.reply_text(reply_text, reply_markup=button, quote=True)
     except Exception:
         print(f"!!! UPLOAD ERROR: {traceback.format_exc()}")
-        await message.reply_text("Sorry, something went wrong.")
+        await message.reply_text("Sorry, something went wrong during processing.")
 
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def file_handler(_, message: Message):
