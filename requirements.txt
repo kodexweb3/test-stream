@@ -1,0 +1,6 @@
+fastapi[standard]
+pyrogram
+tgcrypto
+python-dotenv
+python-magic
+motor
