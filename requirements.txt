@@ -4,3 +4,5 @@ tgcrypto
 python-dotenv
 python-magic
 motor
+jinja2
+python-multipart
