@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Secure File Access</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+    body {
+        font-family: "Inter", system-ui, sans-serif;
+        background: radial-gradient(circle at top, #1f2937, #020617);
+        color: #e5e7eb;
+        user-select: none;
+    }
+    .glass {
+        background: rgba(255,255,255,0.06);
+        backdrop-filter: blur(18px);
+        border: 1px solid rgba(255,255,255,0.08);
+    }
+    .btn {
+        padding: 0.85rem 1.6rem;
+        border-radius: 0.75rem;
+        font-weight: 600;
+        transition: all 0.25s ease;
+    }
+    .btn-primary {
+        background: linear-gradient(135deg,#6366f1,#4f46e5);
+        box-shadow: 0 10px 30px rgba(99,102,241,.35);
+    }
+    .btn-primary:hover {
+        transform: translateY(-2px) scale(1.03);
+        box-shadow: 0 14px 40px rgba(99,102,241,.55);
+    }
+    .btn-secondary {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.15);
+    }
+    .btn-secondary:hover {
+        background: rgba(255,255,255,0.15);
+        transform: translateY(-2px);
+    }
+    .loader {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        border: 6px solid rgba(255,255,255,.15);
+        border-top-color: #6366f1;
+        animation: spin 1.2s linear infinite;
+        margin: auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- HEADER -->
+<header class="p-6 text-center">
+    <h1 class="text-2xl font-bold tracking-wide">
+        <span class="text-indigo-400">Secure</span> Access
+    </h1>
+    <p class="text-sm text-gray-400 mt-1">Private • Fast • Encrypted</p>
+</header>
+
+<!-- MAIN -->
+<main class="flex-grow flex items-center justify-center px-4">
+    <div class="max-w-xl w-full glass rounded-2xl p-6 sm:p-8 text-center shadow-2xl">
+
+        <!-- Loader -->
+        <div id="loader-container">
+            <div class="loader"></div>
+            <p class="mt-4 text-gray-400">Fetching your file securely…</p>
+        </div>
+
+        <!-- Content -->
+        <div id="content-container" style="display:none">
+            <h2 id="file-name" class="text-xl sm:text-2xl font-bold break-words"></h2>
+            <p id="file-size" class="text-gray-400 mt-1 mb-6"></p>
+
+            <div id="button-container" class="flex flex-col gap-4"></div>
+
+            <p class="mt-6 text-xs text-gray-500">
+                Links are private & protected. Do not share publicly.
+            </p>
+        </div>
+
+    </div>
+</main>
+
+<!-- FOOTER -->
+<footer class="p-4 text-center text-xs text-gray-500">
+    © 2025 • All Rights Reserved
+</footer>
+
+<script>
+const BASE_URL = window.location.origin;
+const FILE_ID = window.location.pathname.split("/").pop();
+
+async function fetchFileData() {
+    const loader = document.getElementById("loader-container");
+    const content = document.getElementById("content-container");
+    const fileNameEl = document.getElementById("file-name");
+    const fileSizeEl = document.getElementById("file-size");
+    const buttonContainer = document.getElementById("button-container");
+
+    try {
+        const res = await fetch(`${BASE_URL}/api/file/${FILE_ID}`);
+        if (!res.ok) throw new Error();
+
+        const data = await res.json();
+        document.title = data.file_name;
+
+        fileNameEl.innerText = data.file_name;
+        fileSizeEl.innerText = `Size • ${data.file_size}`;
+
+        buttonContainer.innerHTML = "";
+
+        if (data.is_media) {
+            const mx = `intent:${data.direct_dl_link}#Intent;action=android.intent.action.VIEW;type=video/*;end`;
+            const vlc = `intent:${data.direct_dl_link}#Intent;action=android.intent.action.VIEW;type=video/*;package=org.videolan.vlc;end`;
+
+            buttonContainer.innerHTML = `
+                <a href="${data.direct_dl_link}" class="btn btn-primary">⬇ Download Now</a>
+                <a href="${mx}" class="btn btn-secondary">▶ Play in MX Player</a>
+                <a href="${vlc}" class="btn btn-secondary">▶ Play in VLC</a>
+            `;
+        } else {
+            buttonContainer.innerHTML = `
+                <a href="${data.direct_dl_link}" class="btn btn-primary">⬇ Download File</a>
+            `;
+        }
+
+        loader.style.display = "none";
+        content.style.display = "block";
+
+    } catch {
+        loader.innerHTML = "<p class='text-red-400'>❌ Link expired or invalid</p>";
+    }
+}
+
+fetchFileData();
+document.addEventListener("contextmenu", e => e.preventDefault());
+</script>
+
+</body>
+</html>
