@@ -1,5 +1,3 @@
-# app.py (THE REAL, FINAL, CLEAN, EASY-TO-READ FULL CODE WITH DUPLICATE CHECK & DIRECT LINK)
-
 import os
 import asyncio
 import secrets
@@ -26,6 +24,9 @@ import math
 from config import Config
 from database import db
 
+# temporary storage for file processing
+waiting_for_name = {}
+
 # =====================================================================================
 # --- SETUP: BOT, WEB SERVER, AUR LOGGING ---
 # =====================================================================================
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI):
         await bot.start()
         me = await bot.get_me()
         Config.BOT_USERNAME = me.username
-        print(f"✅ Main Bot [@{Config.BOT_USERNAME}] safaltapoorvak start ho gaya.")
+        print(f"✅ Main Bot [@{Config.BOT_USERNAME}] start ho gaya.")
 
         multi_clients[0] = bot
         work_loads[0] = 0
@@ -56,9 +57,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 print(f"!!! WARNING: Force Sub error: {e}")
         
-        try: await cleanup_channel(bot)
-        except Exception as e: print(f"Warning: Cleanup fail: {e}")
-
         print("--- Lifespan: Startup poora hua. ---")
     except Exception as e:
         print(f"!!! FATAL ERROR: {traceback.format_exc()}")
@@ -107,13 +105,7 @@ def get_readable_file_size(size_in_bytes):
 
 def mask_filename(name: str):
     if not name: return "Protected File"
-    base, ext = os.path.splitext(name)
-    metadata_pattern = re.compile(r'((19|20)\d{2}|4k|2160p|1080p|720p|480p|360p|HEVC|x265|BluRay|WEB-DL|HDRip)', re.IGNORECASE)
-    match = metadata_pattern.search(base)
-    title_part = base[:match.start()].strip(' .-_') if match else base
-    metadata_part = base[match.start():] if match else ""
-    masked_title = ''.join(c if (i % 3 == 0 and c.isalnum()) else ('*' if c.isalnum() else c) for i, c in enumerate(title_part))
-    return f"{masked_title} {metadata_part}{ext}".strip()
+    return name # Disabling masking as per your requirement for custom names
 
 # =====================================================================================
 # --- PYROGRAM BOT HANDLERS ---
@@ -135,78 +127,84 @@ async def start_command(client: Client, message: Message):
         btn = InlineKeyboardMarkup([[InlineKeyboardButton("Open Link", url=final_link)]])
         await message.reply_text(f"__✅ Verification Successful!\n\nCopy Link:__ `{final_link}`", reply_markup=btn, quote=True)
     else:
-        await message.reply_text(f"👋 **Hello, {message.from_user.first_name}!**\nWelcome To Sharing Box Bot. Send any file to get links.")
+        await message.reply_text(f"👋 **Hello, {message.from_user.first_name}!**\nSend any video/file to get links.")
 
-async def handle_file_upload(message: Message):
-    try:
-        media = message.document or message.video or message.audio
-        if not media: return
-
-        # ১. ডাটাবেস চেক (Duplicate Check) - আপনার অরিজিনাল লজিক
-        existing_data = await db.collection.find_one({"file_unique_id": media.file_unique_id})
-        
-        if existing_data:
-            unique_id = existing_data["_id"]
-            storage_msg_id = existing_data["message_id"]
-        else:
-            # ২. স্টোরেজ চ্যানেল থেকে ফরওয়ার্ড হয়েছে কি না চেক
-            is_from_storage = False
-            if message.forward_from_chat and message.forward_from_chat.id == Config.STORAGE_CHANNEL:
-                is_from_storage = True
-
-            # ৩. যদি স্টোরেজ থেকে না আসে, তবে নাম পরিবর্তন হবে
-            if not is_from_storage:
-                original_full_name = media.file_name or "stream_file"
-                name_part, extension = os.path.splitext(original_full_name)
-                # আপনার দেওয়া ফরম্যাট অনুযায়ী নাম
-                new_name = f"[moviedekhobd.rf.gd]- {name_part} [moviedekhobd.rf.gd]{extension}"
-                
-                # নতুন নামে ফাইলটি স্টোরেজ চ্যানেলে পাঠানো
-                sent_message = await message.copy(
-                    chat_id=Config.STORAGE_CHANNEL,
-                    caption=f"**File Name:** `{new_name}`" # অপশনাল ক্যাপশন
-                )
-                # গুরুত্বপূর্ণ: টেলিগ্রাম কপি করার সময় নাম পরিবর্তন করতে ঝামেলা করলে এটি ব্যবহার হয়
-            else:
-                # স্টোরেজ চ্যানেল থেকে আসলে সরাসরি কপি
-                sent_message = await message.copy(chat_id=Config.STORAGE_CHANNEL)
-
-            unique_id = secrets.token_urlsafe(8)
-            storage_msg_id = sent_message.id
-            
-            # ডাটাবেসে সেভ করা
-            await db.collection.insert_one({
-                "_id": unique_id, 
-                "message_id": storage_msg_id, 
-                "file_unique_id": media.file_unique_id
-            })
-        
-        # ৪. লিঙ্ক এবং রিপ্লাই (আপনার অরিজিনাল স্টাইল)
-        verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
-        safe_name = "".join(c for c in (media.file_name or "stream") if c.isalnum() or c in ('.','_','-')).strip()
-        direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/{safe_name}"
-        
-        reply_text = (
-            f"✅ **File Uploaded!**\n\n"
-            f"📄 **Name:** `{media.file_name}`\n"
-            f"⚖️ **Size:** `{get_readable_file_size(media.file_size)}`\n\n"
-            f"🔗 **Direct Stream Link:**\n`{direct_link}`"
-        )
-        
-        button = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Get Link Now", url=verify_link)],
-            [InlineKeyboardButton("Direct Link", url=direct_link)]
-        ])
-        
-        await message.reply_text(reply_text, reply_markup=button, quote=True)
-    except Exception as e:
-        # এরর লগ চেক করার জন্য প্রিন্ট রাখা হলো
-        print(f"!!! UPLOAD ERROR: {traceback.format_exc()}")
-        await message.reply_text("Sorry, something went wrong.")
-
+# Step 1: Handle File and Ask for Name
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
-async def file_handler(_, message: Message):
-    await handle_file_upload(message)
+async def handle_incoming_file(client, message: Message):
+    media = message.document or message.video or message.audio
+    
+    # Check if duplicate already exists in DB to save time
+    existing_data = await db.collection.find_one({"file_unique_id": media.file_unique_id})
+    if existing_data:
+        unique_id = existing_data["_id"]
+        storage_msg_id = existing_data["message_id"]
+        direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/file"
+        verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
+        
+        btn = InlineKeyboardMarkup([[InlineKeyboardButton("Get Link", url=verify_link)], [InlineKeyboardButton("Stream", url=direct_link)]])
+        return await message.reply_text("✅ This file already exists in our database!", reply_markup=btn, quote=True)
+
+    # If not duplicate, store file message and ask for name
+    waiting_for_name[message.from_user.id] = message
+    await message.reply_text(
+        "📝 **Now send the Name for this file.**\n\n"
+        "I will automatically add `moviedekhobd.rf.gd` at the beginning and before the extension.",
+        quote=True
+    )
+
+# Step 2: Receive Name and Process
+@bot.on_message(filters.private & filters.text & ~filters.command("start"))
+async def process_name_and_upload(client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in waiting_for_name:
+        return
+
+    original_file_message = waiting_for_name.pop(user_id)
+    media = original_file_message.document or original_file_message.video or original_file_message.audio
+    
+    user_input_name = message.text
+    original_name = media.file_name or "video.mp4"
+    name_part, extension = os.path.splitext(original_name)
+    if not extension: extension = ".mkv"
+
+    # Formatting: moviedekhobd.rf.gd [Your Name] moviedekhobd.rf.gd.extension
+    final_file_name = f"moviedekhobd.rf.gd {user_input_name} moviedekhobd.rf.gd{extension}"
+
+    try:
+        sts = await message.reply_text("🚀 Processing and sending to storage...")
+        
+        # Uploading to Storage with NEW NAME
+        sent_message = await bot.send_document(
+            chat_id=Config.STORAGE_CHANNEL,
+            document=media.file_id,
+            file_name=final_file_name,
+            caption=f"**File:** `{final_file_name}`"
+        )
+
+        unique_id = secrets.token_urlsafe(8)
+        storage_msg_id = sent_message.id
+        
+        # Save to DB
+        await db.collection.insert_one({
+            "_id": unique_id, 
+            "message_id": storage_msg_id, 
+            "file_unique_id": media.file_unique_id
+        })
+
+        direct_link = f"{Config.BASE_URL}/dl/{storage_msg_id}/{final_file_name.replace(' ', '_')}"
+        verify_link = f"https://t.me/{Config.BOT_USERNAME}?start=verify_{unique_id}"
+
+        await sts.edit(
+            f"✅ **Success!**\n\n📄 **Name:** `{final_file_name}`\n⚖️ **Size:** `{get_readable_file_size(media.file_size)}`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Get Link", url=verify_link)],
+                [InlineKeyboardButton("Stream Online", url=direct_link)]
+            ])
+        )
+    except Exception:
+        print(traceback.format_exc())
+        await message.reply_text("❌ Something went wrong while processing.")
 
 # =====================================================================================
 # --- FASTAPI WEB SERVER (STREAMING & API) ---
@@ -231,7 +229,7 @@ async def get_file_details_api(request: Request, unique_id: str):
         mime_type = media.mime_type or "application/octet-stream"
         dl_url = f"{Config.BASE_URL}/dl/{message_id}/{safe_name}"
         return {
-            "file_name": mask_filename(file_name),
+            "file_name": file_name,
             "file_size": get_readable_file_size(media.file_size),
             "is_media": mime_type.startswith(("video", "audio")),
             "direct_dl_link": dl_url,
@@ -289,8 +287,6 @@ async def simple_gatekeeper(c, m):
                 await c.ban_chat_member(Config.STORAGE_CHANNEL, m.new_chat_member.user.id)
                 await c.unban_chat_member(Config.STORAGE_CHANNEL, m.new_chat_member.user.id)
     except: pass
-
-async def cleanup_channel(c): pass
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), log_level="info")
